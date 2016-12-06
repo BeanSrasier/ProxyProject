@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+
+"""
+Proxy Project
+"""
+
+from socket import socket
+import os
+
+def server(port):
+    """Main"""
+    sock = socket() #default is AF_INET, SOCK_STREAM
+    sock.bind(('localhost', port))
+    sock.listen(5)
+    while True:
+        try:
+            conn, _ = sock.accept()
+        except KeyboardInterrupt:
+            break
+        conn.set_inheritable(True)
+        if os.fork() == 0: #child process (0)
+            web_sock = socket()
+            try:
+                child(conn, web_sock)
+            except KeyboardInterrupt:
+                pass
+            web_sock.close()
+            conn.close()
+            os._exit(0) #pylint: disable=protected-access
+        conn.close()
+        while os.waitpid(-1, os.WNOHANG) != (0, 0):
+            pass
+    sock.close()
+
+def child(sock, web_sock):
+    """Child process"""
+    headers = {}
+    msg = b'' #byte string
+    while b'\r\n\r\n' not in msg:
+        msg += sock.recv(4096)
+    #convert byte string to acscii
+    headerlines = msg.split(b'\r\n\r\n')[0].decode('US-ASCII').split('\r\n')
+    print(headerlines[0])
+    for line in headerlines[1:]:
+        print(line)
+        header = line.split(':', 1) #split on first instance of ':'
+        if len(header) == 2:
+            headers[header[0].strip().lower()] = header[1].strip() #strip whitespace
+    host = headers['host'].split(':')
+    address = host[0]
+    if len(host) == 2: #contains port number
+        port = int(host[1])
+    else:
+        port = 80
+    web_sock.connect((address, port))
+    while True:
+        web_sock.send(msg.split(b'\r\n\r\n')[0])
+        if 'content-length' in headers:
+            while len(msg.split(b'\r\n\r\n')[1]) < headers['content-length']:
+                msg += sock.recv(4096)
+
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) == 2:
+        server(int(sys.argv[1]))
+    else:
+        print('incorrect parameters')
