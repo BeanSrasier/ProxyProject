@@ -35,7 +35,7 @@ def server(port):
 
 def child(clnt_sock, serv_sock):
     """Child process"""
-    msg, headers = parseHeaders(clnt_sock)
+    msg, headers = parse_headers(clnt_sock)
     host = headers['host'].split(':')
     address = host[0]
     if len(host) == 2: #contains port number
@@ -45,43 +45,61 @@ def child(clnt_sock, serv_sock):
     #recv from client (web browser) and send to server (web server)
     serv_sock.connect((address, port))
     total_bytes = 0
-    endFound = checkEnd(headers, msg)
-    while not endFound or total_bytes < len(msg):
-        if not endFound and total_bytes < len(msg):
+    end_found = check_end(headers, msg)
+    while not end_found or total_bytes < len(msg):
+        if not end_found and total_bytes < len(msg):
             recv, send, _ = select([clnt_sock], [serv_sock], [])
             if recv:
                 msg += clnt_sock.recv(4096)
-                endFound = checkEnd(headers, msg)
+                end_found = check_end(headers, msg)
             if send:
                 total_bytes += serv_sock.send(msg[total_bytes:])
-        elif not endFound:
+        elif not end_found:
             msg += clnt_sock.recv(4096)
-            endFound = checkEnd(headers, msg)
+            end_found = check_end(headers, msg)
         else:
             total_bytes += serv_sock.send(msg[total_bytes:])
     #recv from server (web server) and send to client (web browser)
-    msg, headers = parseHeaders(serv_sock)
+    msg, headers = parse_headers(serv_sock)
+    total_bytes = 0
+    end_found = check_end(headers, msg)
+    while not end_found or total_bytes < len(msg):
+        if not end_found and total_bytes < len(msg):
+            recv, send, _ = select([serv_sock], [clnt_sock], [])
+            if recv:
+                msg += serv_sock.recv(4096)
+                end_found = check_end(headers, msg)
+            if send:
+                total_bytes += clnt_sock.send(msg[total_bytes:])
+        elif not end_found:
+            msg += serv_sock.recv(4096)
+            end_found = check_end(headers, msg)
+        else:
+            total_bytes += clnt_sock.send(msg[total_bytes:])
 
-def checkEnd(headers, msg):
+def check_end(headers, msg):
+    """Check for end of body"""
     if 'transfer-encoding' in headers and headers['transfer-encoding'] == 'chunked':
         body = msg.split(b'\r\n\r\n')[1]
         current_position = 0
         while current_position < len(body):
-            index_after_size = body.find(b'\r\n', current_position) #split on first instance of '\r\n'
+            #split on first instance of '\r\n'
+            index_after_size = body.find(b'\r\n', current_position)
             if index_after_size == -1:
                 return False
-            chunk_size = int(body[current_position:index], 16)
+            chunk_size = int(body[current_position:index_after_size], 16)
             if chunk_size == 0 and len(body) == index_after_size + 4:
                 return True
-            current_position = index_after_size + int(body[current_position:index], 16) + 4
+            current_position = index_after_size + chunk_size + 4
         return False
     elif 'content-length' in headers:
-        if headers['content-length'] > len(msg.split(b'\r\n\r\n')[1]):
+        if int(headers['content-length']) > len(msg.split(b'\r\n\r\n')[1]):
             return False
         return True
     return True
 
-def parseHeaders(sock):
+def parse_headers(sock):
+    """Parse Headers"""
     msg = b''
     headers = {}
     while b'\r\n\r\n' not in msg:
