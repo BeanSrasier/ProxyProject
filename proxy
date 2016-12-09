@@ -46,13 +46,14 @@ def child(clnt_sock, serv_sock):
     serv_sock.connect((address, port))
     total_bytes = 0
     end_found = check_end(headers, msg)
+    server_connection_closed = False
     while not end_found or total_bytes < len(msg):
         if not end_found and total_bytes < len(msg):
             recv, send, _ = select([clnt_sock], [serv_sock], [])
             if recv:
                 msg += clnt_sock.recv(4096)
                 end_found = check_end(headers, msg)
-            if send:
+            if send and not server_connection_closed:
                 total_bytes += serv_sock.send(msg[total_bytes:])
         elif not end_found:
             msg += clnt_sock.recv(4096)
@@ -66,16 +67,18 @@ def child(clnt_sock, serv_sock):
     while not end_found or total_bytes < len(msg):
         if not end_found and total_bytes < len(msg):
             recv, send, _ = select([serv_sock], [clnt_sock], [])
-            if recv:
+            if recv and not server_connection_closed:
                 msg += serv_sock.recv(4096)
                 end_found = check_end(headers, msg)
             if send:
                 total_bytes += clnt_sock.send(msg[total_bytes:])
-        elif not end_found:
+        elif not end_found and not server_connection_closed:
             msg += serv_sock.recv(4096)
             end_found = check_end(headers, msg)
         else:
             total_bytes += clnt_sock.send(msg[total_bytes:])
+        if msg[0] == '\0':
+            server_connection_closed = True
 
 def check_end(headers, msg):
     """Check for end of body"""
