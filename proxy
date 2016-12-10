@@ -20,11 +20,15 @@ def server(port):
             break
         clnt_sock.set_inheritable(True)
         if os.fork() == 0: #child process (0)
-            child_sock = socket()
             try:
-                child(clnt_sock, child_sock)
-            except KeyboardInterrupt:
+                log("Child starting")
+                while True:              
+                    child_sock = socket()
+                    child(clnt_sock, child_sock)
+                    child_sock.close()
+            except (KeyboardInterrupt, ConnectionError):
                 pass
+            log("Child closing")
             child_sock.close()
             clnt_sock.close()
             os._exit(0) #pylint: disable=protected-access
@@ -44,41 +48,47 @@ def child(clnt_sock, serv_sock):
         port = 80
     #recv from client (web browser) and send to server (web server)
     serv_sock.connect((address, port))
-    total_bytes = 0
-    end_found = check_end(headers, msg)
-    server_connection_closed = False
-    while not end_found or total_bytes < len(msg):
-        if not end_found and total_bytes < len(msg):
-            recv, send, _ = select([clnt_sock], [serv_sock], [])
-            if recv:
-                msg += clnt_sock.recv(4096)
-                end_found = check_end(headers, msg)
-            if send and not server_connection_closed:
-                total_bytes += serv_sock.send(msg[total_bytes:])
-        elif not end_found:
-            msg += clnt_sock.recv(4096)
-            end_found = check_end(headers, msg)
-        else:
-            total_bytes += serv_sock.send(msg[total_bytes:])
+
+    transfer_data(serv_sock, clnt_sock, headers, msg)
     #recv from server (web server) and send to client (web browser)
+    log('send response')
     msg, headers = parse_headers(serv_sock)
+    transfer_data(clnt_sock, serv_sock, headers, msg)
+    log('response sent')
+
+def transfer_data(to_sock, from_sock, headers, msg):
+    """Transfer data from a receiving socket to a sending socket"""
     total_bytes = 0
     end_found = check_end(headers, msg)
     while not end_found or total_bytes < len(msg):
         if not end_found and total_bytes < len(msg):
-            recv, send, _ = select([serv_sock], [clnt_sock], [])
-            if recv and not server_connection_closed:
-                msg += serv_sock.recv(4096)
-                end_found = check_end(headers, msg)
+            recv, send, _ = select([from_sock], [to_sock], [])
+            if recv:
+                try:
+                    msg += socket_recv(from_sock)
+                except ConnectionAbortedError:
+                    end_found = True
+                else:
+                    end_found = check_end(headers, msg)
             if send:
-                total_bytes += clnt_sock.send(msg[total_bytes:])
-        elif not end_found and not server_connection_closed:
-            msg += serv_sock.recv(4096)
-            end_found = check_end(headers, msg)
+                total_bytes += to_sock.send(msg[total_bytes:])
+        elif not end_found:
+            try:
+                msg += socket_recv(from_sock)
+            except ConnectionAbortedError:
+                end_found = True
+            else:
+                end_found = check_end(headers, msg)
         else:
-            total_bytes += clnt_sock.send(msg[total_bytes:])
-        if msg[0] == '\0':
-            server_connection_closed = True
+            total_bytes += to_sock.send(msg[total_bytes:])
+        #log('end found: {} total bytes: {}/{}'.format(end_found, total_bytes, len(msg)))
+
+def socket_recv(sock):
+    """Used to catch the error that the connection has been severed"""
+    msg = sock.recv(4096)
+    if len(msg) == 0:
+        raise ConnectionAbortedError('Client closed the socket')
+    return msg
 
 def check_end(headers, msg):
     """Check for end of body"""
@@ -106,20 +116,23 @@ def parse_headers(sock):
     msg = b''
     headers = {}
     while b'\r\n\r\n' not in msg:
-        msg += sock.recv(4096)
+        msg += socket_recv(sock)
     #convert byte string to acscii
     headerlines = msg.split(b'\r\n\r\n')[0].decode('US-ASCII').split('\r\n')
-    print(headerlines[0])
+    log(headerlines[0])
     for line in headerlines[1:]:
-        print(line)
+        log(line)
         header = line.split(':', 1) #split on first instance of ':'
         if len(header) == 2:
             headers[header[0].strip().lower()] = header[1].strip() #strip whitespace
     return msg, headers
+
+def log(string):
+    print('{} - {}'.format(os.getpid(), string))
 
 if __name__ == '__main__':
     import sys
     if len(sys.argv) == 2:
         server(int(sys.argv[1]))
     else:
-        print('incorrect parameters')
+        print('Incorrect parameters')
