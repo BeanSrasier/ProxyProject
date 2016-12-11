@@ -21,14 +21,12 @@ def server(port):
         clnt_sock.set_inheritable(True)
         if os.fork() == 0: #child process (0)
             try:
-                log("Child starting")
-                while True:              
+                while True: #loop until an interrupt is received
                     child_sock = socket()
                     child(clnt_sock, child_sock)
                     child_sock.close()
             except (KeyboardInterrupt, ConnectionError):
                 pass
-            log("Child closing")
             child_sock.close()
             clnt_sock.close()
             os._exit(0) #pylint: disable=protected-access
@@ -48,20 +46,17 @@ def child(clnt_sock, serv_sock):
         port = 80
     #recv from client (web browser) and send to server (web server)
     serv_sock.connect((address, port))
-
     transfer_data(serv_sock, clnt_sock, headers, msg)
     #recv from server (web server) and send to client (web browser)
-    log('send response')
     msg, headers = parse_headers(serv_sock)
     transfer_data(clnt_sock, serv_sock, headers, msg)
-    log('response sent')
 
 def transfer_data(to_sock, from_sock, headers, msg):
     """Transfer data from a receiving socket to a sending socket"""
     total_bytes = 0
     end_found = check_end(headers, msg)
     while not end_found or total_bytes < len(msg):
-        if not end_found and total_bytes < len(msg):
+        if not end_found and total_bytes < len(msg): #still need to receive and send data
             recv, send, _ = select([from_sock], [to_sock], [])
             if recv:
                 try:
@@ -72,28 +67,28 @@ def transfer_data(to_sock, from_sock, headers, msg):
                     end_found = check_end(headers, msg)
             if send:
                 total_bytes += to_sock.send(msg[total_bytes:])
-        elif not end_found:
+        elif not end_found: #still need to receive data
             try:
                 msg += socket_recv(from_sock)
             except ConnectionAbortedError:
                 end_found = True
             else:
                 end_found = check_end(headers, msg)
-        else:
+        else: #data left to send
             total_bytes += to_sock.send(msg[total_bytes:])
-        #log('end found: {} total bytes: {}/{}'.format(end_found, total_bytes, len(msg)))
+    print(msg.split(b'\r\n\r\n', 1)[1]) #prints body
 
 def socket_recv(sock):
     """Used to catch the error that the connection has been severed"""
     msg = sock.recv(4096)
     if len(msg) == 0:
-        raise ConnectionAbortedError('Client closed the socket')
+        raise ConnectionAbortedError('Sender closed the socket')
     return msg
 
 def check_end(headers, msg):
-    """Check for end of body"""
+    """Check for finding the end of the message body"""
     if 'transfer-encoding' in headers and headers['transfer-encoding'] == 'chunked':
-        body = msg.split(b'\r\n\r\n')[1]
+        body = msg.split(b'\r\n\r\n', 1)[1]
         current_position = 0
         while current_position < len(body):
             #split on first instance of '\r\n'
@@ -101,12 +96,12 @@ def check_end(headers, msg):
             if index_after_size == -1:
                 return False
             chunk_size = int(body[current_position:index_after_size], 16)
-            if chunk_size == 0 and len(body) == index_after_size + 4:
+            if chunk_size == 0 and len(body) == index_after_size + 4: #index + '\r\n' + '\r\n'
                 return True
             current_position = index_after_size + chunk_size + 4
         return False
     elif 'content-length' in headers:
-        if int(headers['content-length']) > len(msg.split(b'\r\n\r\n')[1]):
+        if int(headers['content-length']) > len(msg.split(b'\r\n\r\n', 1)[1]):
             return False
         return True
     return True
@@ -115,20 +110,17 @@ def parse_headers(sock):
     """Parse Headers"""
     msg = b''
     headers = {}
-    while b'\r\n\r\n' not in msg:
+    while b'\r\n\r\n' not in msg: #find separation of body and headers
         msg += socket_recv(sock)
     #convert byte string to acscii
-    headerlines = msg.split(b'\r\n\r\n')[0].decode('US-ASCII').split('\r\n')
-    log(headerlines[0])
+    headerlines = msg.split(b'\r\n\r\n', 1)[0].decode('US-ASCII').split('\r\n')
+    print(headerlines[0])
     for line in headerlines[1:]:
-        log(line)
+        print(line)
         header = line.split(':', 1) #split on first instance of ':'
         if len(header) == 2:
             headers[header[0].strip().lower()] = header[1].strip() #strip whitespace
     return msg, headers
-
-def log(string):
-    print('{} - {}'.format(os.getpid(), string))
 
 if __name__ == '__main__':
     import sys
